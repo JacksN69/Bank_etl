@@ -1,0 +1,272 @@
+# ============================================================================
+# Banking ETL Pipeline - Docker Compose Configuration
+# ============================================================================
+# This Docker Compose file orchestrates all services for the banking ETL
+# pipeline including PostgreSQL, Airflow, and supporting tools.
+#
+# Usage:
+#   docker-compose up                      # Start all services
+#   docker-compose down                    # Stop and remove containers
+#   docker-compose logs -f airflow-webserver  # View Airflow logs
+# ============================================================================
+
+x-airflow-image: &airflow-image
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: banking-etl-airflow:local
+
+services:
+  # ============================================================================
+  # PostgreSQL - Data Warehouse
+  # ============================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: banking-etl-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      # Persistent volume for database data
+      - postgres_data:/var/lib/postgresql/data
+      # SQL initialization scripts
+      - ./sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - banking-etl-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+
+  # ============================================================================
+  # PgAdmin - PostgreSQL Web Administration (Optional)
+  # ============================================================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: banking-etl-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    networks:
+      - banking-etl-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+
+  # ============================================================================
+  # Airflow PostgreSQL Metadata Database
+  # ============================================================================
+  airflow-db:
+    image: postgres:15-alpine
+    container_name: banking-etl-airflow-db
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - banking-etl-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  # ============================================================================
+  # Airflow Init - Database initialization service
+  # ============================================================================
+  airflow-init:
+    <<: *airflow-image
+    container_name: banking-etl-airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /sources/logs
+        chown -R "${AIRFLOW_UID}:0" /sources/logs
+        exec /entrypoint airflow version
+    environment:
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+    user: "0:0"
+    volumes:
+      - .:/sources
+    networks:
+      - banking-etl-network
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+    restart: on-failure
+
+  # ============================================================================
+  # Airflow Webserver - User Interface
+  # ============================================================================
+  airflow-webserver:
+    <<: *airflow-image
+    container_name: banking-etl-airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+      AIRFLOW__CORE__DAGS_FOLDER: /home/airflow/airflow/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+      AIRFLOW_GID: 0
+      # Database access for ETL code (point to the postgres service)
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB}
+    depends_on:
+      - airflow-db
+      - postgres
+      - airflow-init
+    volumes:
+      - ./dags:/home/airflow/airflow/dags
+      - ./etl:/home/airflow/airflow/etl:ro
+      - ./sql:/home/airflow/airflow/sql:ro
+      - ./data:/data:ro
+      - ./logs:/home/airflow/airflow/logs
+      - ./config:/home/airflow/config
+    networks:
+      - banking-etl-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+
+  # ============================================================================
+  # Airflow Scheduler - Task Scheduling
+  # ============================================================================
+  airflow-scheduler:
+    <<: *airflow-image
+    container_name: banking-etl-airflow-scheduler
+    command: scheduler
+    env_file: .env
+    environment:
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
+      AIRFLOW__CORE__DAGS_FOLDER: /home/airflow/airflow/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+      AIRFLOW_GID: 0
+      # Database access for ETL code (point to the postgres service)
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB}
+    depends_on:
+      - airflow-db
+      - postgres
+      - airflow-init
+    volumes:
+      - ./dags:/home/airflow/airflow/dags
+      - ./etl:/home/airflow/airflow/etl:ro
+      - ./sql:/home/airflow/airflow/sql:ro
+      - ./data:/data:ro
+      - ./logs:/home/airflow/airflow/logs
+      - ./config:/home/airflow/config
+    networks:
+      - banking-etl-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+
+  # ============================================================================
+  # ETL Runner - Dedicated ETL service container
+  # ============================================================================
+  etl-runner:
+    <<: *airflow-image
+    container_name: banking-etl-runner
+    command: python -m etl.pipeline_runner
+    env_file: .env
+    environment:
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST:-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB}
+      DATA_INPUT_PATH: ${DATA_INPUT_PATH:-/data/Comprehensive_Banking_Database.csv.xlsx}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./etl:/home/airflow/airflow/etl:ro
+      - ./sql:/home/airflow/airflow/sql:ro
+      - ./data:/data:ro
+      - ./logs:/home/airflow/airflow/logs
+    networks:
+      - banking-etl-network
+    profiles:
+      - etl
+
+# ============================================================================
+# Volumes - Persistent data storage
+# ============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  airflow_db_data:
+    driver: local
+
+# ============================================================================
+# Networks - Service communication
+# ============================================================================
+networks:
+  banking-etl-network:
+    driver: bridge
+    name: banking-etl-network
