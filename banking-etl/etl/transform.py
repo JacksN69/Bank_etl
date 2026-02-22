@@ -1,13 +1,3 @@
-"""
-Banking ETL Pipeline - Data Transformation Module
-
-This module transforms raw staging data into the dimensional model.
-Performs data cleaning, normalization, and dimension population.
-
-Author: Data Engineering Team
-Date: 2024
-"""
-
 from typing import Dict, Tuple
 
 import pandas as pd
@@ -77,10 +67,6 @@ class DataTransformer:
             logger.error(f"Failed to load staging data: {str(e)}", exc_info=True)
             raise
 
-    # ========================================================================
-    # Data Cleaning Operations
-    # ========================================================================
-
     def clean_dates(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Clean and standardize date fields.
@@ -95,7 +81,6 @@ class DataTransformer:
             logger.info("Cleaning date fields")
 
             if 'transaction_date' in df.columns:
-                # Try multiple date formats
                 for date_format in ['%Y-%m-%d', '%m/%d/%Y', '%d/%m/%Y']:
                     try:
                         df['transaction_date'] = pd.to_datetime(
@@ -106,14 +91,12 @@ class DataTransformer:
                     except:
                         continue
 
-                # If still not converted, use automatic parsing
                 if df['transaction_date'].dtype != 'datetime64[ns]':
                     df['transaction_date'] = pd.to_datetime(
                         df['transaction_date'],
                         errors='coerce'
                     )
 
-                # Remove rows with invalid dates
                 initial_len = len(df)
                 df = df.dropna(subset=['transaction_date'])
                 logger.info(f"Removed {initial_len - len(df)} rows with invalid dates")
@@ -138,22 +121,18 @@ class DataTransformer:
             logger.info("Cleaning transaction amounts")
 
             if 'transaction_amount' in df.columns:
-                # Remove non-numeric characters
                 df['transaction_amount'] = df['transaction_amount'].astype(str).str.replace(
                     r'[^\d.-]', '', regex=True
                 )
 
-                # Convert to numeric
                 df['transaction_amount'] = pd.to_numeric(
                     df['transaction_amount'],
                     errors='coerce'
                 )
 
-                # Remove negative amounts (unless explicitly allowed)
                 initial_len = len(df)
                 df['transaction_amount'] = df['transaction_amount'].abs()
 
-                # Remove zero or null amounts
                 df = df[df['transaction_amount'].notna()]
                 df = df[df['transaction_amount'] > 0]
                 logger.info(f"Removed {initial_len - len(df)} rows with invalid amounts")
@@ -181,11 +160,8 @@ class DataTransformer:
 
             for col in text_columns:
                 if col in ['customer_name', 'branch_location', 'product_type']:
-                    # Trim whitespace
                     df[col] = df[col].str.strip()
-                    # Title case for names
                     df[col] = df[col].str.title()
-                    # Remove duplicates after cleaning
                     df = df[df[col].notna()]
 
             return df
@@ -209,7 +185,6 @@ class DataTransformer:
 
             initial_len = len(df)
 
-            # Primary key: customer_id + transaction_id + transaction_date
             duplicate_subset = ['customer_id', 'transaction_id', 'transaction_date']
             duplicates = df.duplicated(subset=duplicate_subset, keep='first')
 
@@ -237,16 +212,13 @@ class DataTransformer:
         try:
             logger.info("Handling missing values")
 
-            # Log missing value counts
             missing_counts = df.isnull().sum()
             if missing_counts.sum() > 0:
                 logger.info(f"Missing values per column:\n{missing_counts[missing_counts > 0]}")
 
-            # Drop rows with missing critical fields
             critical_cols = ['customer_id', 'transaction_id', 'transaction_date', 'transaction_amount']
             df = df.dropna(subset=[col for col in critical_cols if col in df.columns])
 
-            # Fill non-critical nulls with defaults
             fill_defaults = {
                 'account_status': 'UNKNOWN',
                 'product_type': 'UNCLASSIFIED',
@@ -263,10 +235,6 @@ class DataTransformer:
             logger.error(f"Missing value handling failed: {str(e)}", exc_info=True)
             raise
 
-    # ========================================================================
-    # Data Transformation
-    # ========================================================================
-
     def populate_dimension_tables(self) -> Dict[str, int]:
         """
         Populate dimension tables from staging data.
@@ -278,7 +246,6 @@ class DataTransformer:
             logger.info("Populating dimension tables")
 
             with get_db_session() as session:
-                # Customers
                 customer_query = f"""
                     INSERT INTO {Config.DW_SCHEMA_NAME}.dim_customers
                     (customer_id, customer_name, customer_email, customer_phone, customer_age, customer_segment, is_active)
@@ -304,7 +271,6 @@ class DataTransformer:
                 session.execute(text(customer_query))
                 logger.info("Customers dimension populated")
 
-                # Products
                 product_query = f"""
                     INSERT INTO {Config.DW_SCHEMA_NAME}.dim_products
                     (product_id, product_type, product_name, product_category, is_active)
@@ -323,7 +289,6 @@ class DataTransformer:
                 session.execute(text(product_query))
                 logger.info("Products dimension populated")
 
-                # Branches
                 branch_query = f"""
                     INSERT INTO {Config.DW_SCHEMA_NAME}.dim_branches
                     (branch_id, branch_name, branch_location, is_active)
@@ -342,7 +307,6 @@ class DataTransformer:
                 session.execute(text(branch_query))
                 logger.info("Branches dimension populated")
 
-                # Time
                 time_query = f"""
                     INSERT INTO {Config.DW_SCHEMA_NAME}.dim_time
                     (date, year, quarter, month, day, day_of_week, day_name, month_name, week_of_year, is_weekend)
@@ -380,7 +344,6 @@ class DataTransformer:
         try:
             logger.info("Starting data transformation")
 
-            # Load staging data
             df = self.load_staging_data()
 
             if df.empty:
@@ -390,7 +353,6 @@ class DataTransformer:
             source_ids = [int(x) for x in df['id'].tolist()]
             initial_rows = len(df)
 
-            # Apply transformations
             df = self.clean_dates(df)
             df = self.clean_amounts(df)
             df = self.clean_text_fields(df)
@@ -401,11 +363,9 @@ class DataTransformer:
             self.rows_rejected = initial_rows - self.rows_transformed
             logger.info(f"Transformation complete: {self.rows_transformed}/{initial_rows} rows retained")
 
-            # Persist cleaned rows for deterministic loading
             self.persist_cleaned_data(df)
             self.mark_source_rows_processed(source_ids)
 
-            # Populate dimensions
             self.populate_dimension_tables()
 
             return self.rows_transformed, self.rows_rejected
@@ -520,7 +480,6 @@ def transform_banking_data() -> Tuple[int, int]:
 
 
 if __name__ == '__main__':
-    # Test transformation
     try:
         rows_transformed, rows_rejected = transform_banking_data()
         print(f"Transformation successful: {rows_transformed} rows transformed, {rows_rejected} rows rejected")

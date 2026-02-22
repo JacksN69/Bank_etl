@@ -1,13 +1,3 @@
-"""
-Banking ETL Pipeline - Data Quality Framework
-
-This module implements comprehensive data quality checks and metrics.
-Validates completeness, null percentages, duplicates, and schema compliance.
-
-Author: Data Engineering Team
-Date: 2024
-"""
-
 import pandas as pd
 from typing import Dict, List, Tuple
 from sqlalchemy import text
@@ -40,10 +30,6 @@ class DataQualityChecker:
         order = {'PASS': 0, 'WARNING': 1, 'FAIL': 2}
         if order.get(candidate, 0) > order.get(self.quality_status, 0):
             self.quality_status = candidate
-
-    # ========================================================================
-    # Quality Check Methods
-    # ========================================================================
 
     def check_completeness(self, df: pd.DataFrame, table_name: str) -> Dict:
         """
@@ -103,7 +89,6 @@ class DataQualityChecker:
             else:
                 null_pcts = (df.isnull().sum() / len(df) * 100).to_dict()
 
-            # Calculate average null percentage
             avg_null_pct = sum(null_pcts.values()) / len(null_pcts) if null_pcts else 0
 
             metric_status = 'PASS' if avg_null_pct <= Config.MAX_NULL_PCT else 'FAIL'
@@ -200,7 +185,6 @@ class DataQualityChecker:
                 if column not in df.columns:
                     schema_errors.append(f"Missing column: {column}")
                 else:
-                    # Simple type checking
                     actual_type = str(df[column].dtype)
                     if expected_type not in actual_type:
                         schema_errors.append(f"Column {column}: expected {expected_type}, got {actual_type}")
@@ -245,7 +229,6 @@ class DataQualityChecker:
 
             with get_db_session() as session:
                 for fk_check in fk_checks:
-                    # Simple validation: check if foreign key values exist in referenced table
                     validation_query = text(fk_check['query'])
                     result = session.execute(validation_query)
                     orphaned_count = result.scalar() or 0
@@ -327,7 +310,6 @@ class DataQualityChecker:
             logger.info(f"Starting quality checks for batch {self.batch_id}")
 
             if df is not None:
-                # Check caller-provided data
                 self.quality_metrics.append(
                     self.check_completeness(df, 'raw_banking_data')
                 )
@@ -344,7 +326,6 @@ class DataQualityChecker:
                     )
                 )
             else:
-                # Check loaded warehouse/staging tables when running from Airflow DAG.
                 with get_db_session() as session:
                     fact_df = pd.read_sql(
                         text(f"""
@@ -385,7 +366,6 @@ class DataQualityChecker:
                     )
                 )
 
-            # Store metrics in database
             self.store_quality_metrics()
 
             logger.info(f"Quality checks complete. Overall status: {self.quality_status}")
@@ -413,7 +393,6 @@ def run_data_quality_checks(batch_id: str, df: pd.DataFrame = None) -> Tuple[boo
 
 
 if __name__ == '__main__':
-    # Test quality checks
     checker = DataQualityChecker('TEST_BATCH_001')
     quality_pass, metrics = checker.run_quality_checks()
     print(f"Quality status: {'PASS' if quality_pass else 'FAIL'}")

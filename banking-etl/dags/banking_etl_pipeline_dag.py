@@ -1,21 +1,3 @@
-"""
-Banking ETL Pipeline - Airflow DAG
-
-This DAG orchestrates the complete ETL pipeline:
-1. Extract data from source
-2. Transform and clean data
-3. Load into data warehouse
-4. Run smoke checks
-5. Run data quality checks
-6. Log execution details
-
-Schedule: Daily at 2 AM UTC
-Retry Policy: 3 retries with 5-minute delays
-
-Author: Data Engineering Team
-Date: 2024
-"""
-
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
@@ -23,7 +5,6 @@ from airflow.utils import timezone
 import sys
 from pathlib import Path
 
-# Add etl module to path
 etl_path = Path(__file__).parent.parent
 sys.path.insert(0, str(etl_path))
 
@@ -37,11 +18,6 @@ from etl.quality_checks import run_data_quality_checks
 from sqlalchemy import text
 
 logger = get_logger(__name__)
-
-# ============================================================================
-# Airflow DAG Configuration
-# ============================================================================
-
 
 def task_failure_alert(context):
     """Emit a task-failure alert and optionally send email notification."""
@@ -94,21 +70,15 @@ dag = DAG(
     max_active_runs=1,  # Prevent concurrent runs
 )
 
-# ============================================================================
-# Task Functions
-# ============================================================================
-
 def validate_environment(**context):
     """Validate ETL environment before running pipeline."""
     logger.info("Validating ETL environment")
 
     try:
-        # Test database connection
         db = DatabaseConnection()
         if not db.test_connection():
             raise Exception("Database connection failed")
 
-        # Ensure ETL uses the warehouse database, not Airflow metadata DB.
         with DatabaseConnection.session_scope() as session:
             current_db = session.execute(text("SELECT current_database()")).scalar()
             if current_db != Config.POSTGRES_DB:
@@ -117,7 +87,6 @@ def validate_environment(**context):
                     "Check POSTGRES_* and DATABASE_URL env configuration."
                 )
 
-        # Idempotent bootstrap of schemas/tables required by ETL.
         DatabaseConnection.initialize_warehouse_schema()
         if not DatabaseConnection.schema_health_check():
             raise RuntimeError("Schema health check failed after initialization")
@@ -253,7 +222,6 @@ def logging_task(**context):
     logger.info("Starting execution logging task")
 
     try:
-        # Get metrics from previous tasks
         extraction_rows = context['task_instance'].xcom_pull(
             task_ids='extract', key='extraction_rows'
         ) or 0
@@ -284,10 +252,8 @@ def logging_task(**context):
             execution_end = timezone.make_aware(execution_end, timezone=timezone.utc)
         duration_seconds = int((execution_end - execution_start).total_seconds())
 
-        # Determine overall status
         overall_status = 'SUCCESS' if quality_pass else 'WARNING'
 
-        # Log to audit table
         with DatabaseConnection.session_scope() as session:
             insert_query = text(f"""
                 INSERT INTO audit.etl_execution_log
@@ -319,11 +285,6 @@ def logging_task(**context):
         logger.error(f"Logging task failed: {str(e)}")
         raise
 
-# ============================================================================
-# DAG Tasks
-# ============================================================================
-
-# Task 1: Validate environment
 t_validate = PythonOperator(
     task_id='validate_environment',
     python_callable=validate_environment,
@@ -336,7 +297,6 @@ t_validate = PythonOperator(
     """,
 )
 
-# Task 2: Extract data
 t_extract = PythonOperator(
     task_id='extract',
     python_callable=extract_task,
@@ -344,7 +304,6 @@ t_extract = PythonOperator(
     doc="Extract banking data from source file and load to staging",
 )
 
-# Task 3: Transform data
 t_transform = PythonOperator(
     task_id='transform',
     python_callable=transform_task,
@@ -352,7 +311,6 @@ t_transform = PythonOperator(
     doc="Transform and clean data, populate dimensions",
 )
 
-# Task 4: Load data
 t_load = PythonOperator(
     task_id='load',
     python_callable=load_task,
@@ -360,7 +318,6 @@ t_load = PythonOperator(
     doc="Load transformed data into fact and dimension tables",
 )
 
-# Task 5: Smoke check
 t_smoke = PythonOperator(
     task_id='smoke_check',
     python_callable=smoke_check_task,
@@ -368,7 +325,6 @@ t_smoke = PythonOperator(
     doc="Run post-load smoke checks and persist table row-count metrics",
 )
 
-# Task 6: Quality checks
 t_quality = PythonOperator(
     task_id='quality_check',
     python_callable=quality_check_task,
@@ -376,16 +332,11 @@ t_quality = PythonOperator(
     doc="Run comprehensive data quality validation",
 )
 
-# Task 7: Log execution
 t_logging = PythonOperator(
     task_id='logging',
     python_callable=logging_task,
     dag=dag,
     doc="Log execution details and metrics to audit table",
 )
-
-# ============================================================================
-# DAG Task Dependencies
-# ============================================================================
 
 t_validate >> t_extract >> t_transform >> t_load >> t_smoke >> t_quality >> t_logging

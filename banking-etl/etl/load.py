@@ -1,13 +1,3 @@
-"""
-Banking ETL Pipeline - Data Loading Module
-
-This module loads transformed data into the data warehouse fact and dimension tables.
-Handles bulk inserts with proper error handling and transaction management.
-
-Author: Data Engineering Team
-Date: 2024
-"""
-
 from datetime import datetime
 from typing import Dict, Tuple
 
@@ -47,7 +37,6 @@ class DataLoader:
             rows_failed = 0
 
             with get_db_session() as session:
-                # Insert transformed data from staging into fact table
                 load_query = text(f"""
                     INSERT INTO {Config.DW_SCHEMA_NAME}.fact_transactions
                     (
@@ -161,10 +150,8 @@ class DataLoader:
         try:
             logger.info("Starting data load into warehouse")
 
-            # Load dimensions first
             dimension_stats = self.load_dimensions()
 
-            # Then load facts
             rows_loaded, rows_failed = self.load_facts()
 
             logger.info(f"Data load complete: {rows_loaded} rows loaded, {rows_failed} rows failed")
@@ -188,7 +175,6 @@ def load_banking_data() -> Tuple[int, int]:
 
 
 if __name__ == '__main__':
-    # Test loading
     try:
         rows_loaded, rows_failed = load_banking_data()
         print(f"Loading successful: {rows_loaded} rows loaded, {rows_failed} rows failed")

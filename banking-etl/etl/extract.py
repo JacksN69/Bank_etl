@@ -1,13 +1,3 @@
-"""
-Banking ETL Pipeline - Data Extraction Module
-
-This module extracts data from source files (Excel, CSV) into a staging area.
-Handles multiple file formats and validates extracted data.
-
-Author: Data Engineering Team
-Date: 2024
-"""
-
 import hashlib
 import json
 import os
@@ -162,11 +152,9 @@ class DataExtractor:
             logger.info(f"Starting data extraction from {self.input_path}")
             self._validate_input_file()
 
-            # Compute file hash
             self.file_hash = self._compute_file_hash()
             logger.info(f"Source file hash: {self.file_hash}")
 
-            # Determine file type and read accordingly
             file_ext = Path(self.input_path).suffix.lower()
 
             if file_ext in ['.xlsx', '.xls']:
@@ -178,7 +166,6 @@ class DataExtractor:
             else:
                 raise ValueError(f"Unsupported file format: {file_ext}")
 
-            # Normalize raw source headers into canonical staging fields.
             df = self._normalize_columns(df)
 
             if df.empty:
@@ -192,9 +179,6 @@ class DataExtractor:
             self.rows_extracted = len(df)
             logger.info(f"Rows extracted: {self.rows_extracted}")
 
-            # ================================================================
-            # Extract Metadata
-            # ================================================================
             metadata = {
                 'extraction_timestamp': datetime.utcnow().isoformat(),
                 'source_file': os.path.basename(self.input_path),
@@ -231,14 +215,11 @@ class DataExtractor:
             rows_loaded = 0
             rows_rejected = 0
 
-            # Connect to database
             with get_db_session() as session:
-                # Load data in batches
                 for batch_idx in range(0, len(df), self.batch_size):
                     batch_df = df.iloc[batch_idx:batch_idx + self.batch_size].copy()
 
                     try:
-                        # Construct insert query
                         batch_df['source_file_name'] = metadata['source_file']
                         batch_df['source_file_hash'] = metadata['source_file_hash']
                         batch_df['is_processed'] = False
@@ -247,7 +228,6 @@ class DataExtractor:
                             axis=1
                         )
 
-                        # Use pandas to_sql for bulk insert
                         batch_df.to_sql(
                             'raw_banking_data',
                             con=session.connection(),
@@ -290,7 +270,6 @@ def extract_and_stage_data() -> Tuple[int, int, dict]:
 
 
 if __name__ == '__main__':
-    # Test extraction
     try:
         total_rows, loaded_rows, meta = extract_and_stage_data()
         print(f"Extraction successful: {total_rows} rows extracted, {loaded_rows} rows loaded")
